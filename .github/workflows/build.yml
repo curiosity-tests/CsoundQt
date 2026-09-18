@@ -2,7 +2,7 @@ name: Build And Publish
 on:
   push:
     branches:
-      - csoundqt7
+    - csoundqt7
 
   workflow_dispatch:
 
@@ -17,599 +17,117 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: true
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: true
 
       # Version pins for Qt, csound, csound-plugins and the manual all live in
       # build-appimage.sh, so key all caches on its contents.
-      - name: Cache Qt install
-        id: cache-qt
-        uses: actions/cache@v4
-        with:
-          path: build-appimage/qt
-          key: qt-${{ runner.os }}-${{ hashFiles('installers/Linux/build-appimage.sh') }}
+    - name: Cache Qt install
+      id: cache-qt
+      uses: actions/cache@v4
+      with:
+        path: build-appimage/qt
+        key: qt-${{ runner.os }}-${{ hashFiles('installers/Linux/build-appimage.sh') }}
 
-      - name: Cache source checkouts and downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            build-appimage/src
-            build-appimage/downloads
-          key: src-${{ runner.os }}-${{ hashFiles('installers/Linux/build-appimage.sh') }}
+    - name: Cache source checkouts and downloads
+      uses: actions/cache@v4
+      with:
+        path: |
+          build-appimage/src
+          build-appimage/downloads
+        key: src-${{ runner.os }}-${{ hashFiles('installers/Linux/build-appimage.sh') }}
 
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: build-appimage/.ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: build-appimage/.ccache
+        key: ccache-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          ccache-${{ runner.os }}-
 
-      - name: Build AppImage
-        run: |
-          ./installers/Linux/build-appimage.sh --install-deps
+    - name: Build AppImage
+      run: |
+        ./installers/Linux/build-appimage.sh --install-deps
 
-      - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CsoundQt-Linux
-          path: build-appimage/*.AppImage
-          if-no-files-found: error
-
-  macos:
-    name: Build macOS DMG
-    runs-on: macos-latest
-    timeout-minutes: 180
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache-macos
-      CCACHE_MAXSIZE: 2G
-      QTVERSION: 6.11.2
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: update submodules
-        run: |
-          echo "Calling git submodule update"
-          git submodule update --init --recursive
-          git submodule status --recursive
-          echo "Finished submodules"
-
-      - name: Checkout Csound
-        uses: actions/checkout@v4
-        with:
-          repository: csound/csound
-          path: csound
-          ref: develop
-
-      - name: Get Xcode version
-        id: xcode-version
-        run: echo "version=$(xcodebuild -version | awk '/Xcode/ {print $2}')" >> "$GITHUB_OUTPUT"
-
-      - name: Get Csound commit hash
-        id: csound-hash
-        run: echo "hash=$(git -C csound rev-parse HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Cache Csound build
-        id: cache-csound
-        uses: actions/cache@v4
-        with:
-          path: |
-            csound/build-installer
-            csound/csound_install
-            csound/platform/osx/libsndfile_build/dependencies
-            csound/portmidi_install
-            csound/portaudio_install
-            csound/samplerate_install
-            csound/liblo_install
-          key: csound-installer-${{ runner.os }}-${{ steps.xcode-version.outputs.version }}-${{ steps.csound-hash.outputs.hash }}-${{ hashFiles('.github/workflows/build.yml') }}
-
-      - name: Cache Homebrew downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/Homebrew
-          key: brew-${{ runner.os }}-${{ hashFiles('.github/workflows/*.yml') }}
-          restore-keys: |
-            brew-${{ runner.os }}-
-
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.ccache-macos
-          key: ccache-macos-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            ccache-macos-${{ runner.os }}-${{ steps.xcode-version.outputs.version }}-
-            ccache-macos-${{ runner.os }}-
-
-      - name: Install ccache
-        run: brew install ccache
-
-      # Single Csound build: static deps, arm64, Release, installed into
-      # csound_install. CsoundQt links against this same framework and the
-      # installer .pkg is assembled from it later. Ported from csound's
-      # .github/workflows/csound_builds.yml (macos_build_installer), trimmed
-      # to arm64 and with ccache enabled.
-      - name: macos csound build (installer, arm64)
-        id: csound-build
-        run: |
-          set -euo pipefail
-
-          CSOUND_VERSION="$(sed -n 's/.*CS_VERSION[[:space:]]*"\([0-9]*\)".*/\1/p' csound/CMakeLists.txt).$(sed -n 's/.*CS_SUBVER[[:space:]]*"\([0-9]*\)".*/\1/p' csound/CMakeLists.txt).$(sed -n 's/.*CS_PATCHLEVEL[[:space:]]*"\([0-9]*\)".*/\1/p' csound/CMakeLists.txt)"
-          echo "version=$CSOUND_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building Csound $CSOUND_VERSION installer (arm64)"
-
-          cd csound
-
-          if [ "${{ steps.cache-csound.outputs.cache-hit }}" != 'true' ]; then
-            brew install bison flex
-
-            # static codec libs (arm64 only)
-            cd platform/osx
-            chmod +x build_libsndfile.sh
-            # trim the upstream script down to arm64 only
-            sed -i.bak -e 's/ARCHS=("arm64" "x86_64")/ARCHS=("arm64")/' \
-                        -e 's/ARCHS=("x86_64" "arm64")/ARCHS=("arm64")/' \
-                        -e 's/-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"/-DCMAKE_OSX_ARCHITECTURES="arm64"/' \
-                        build_libsndfile.sh
-            ./build_libsndfile.sh
-            cd ../..
-
-            git clone --depth 1 https://github.com/PortMidi/portmidi.git
-            cmake -S portmidi -B portmidi/build -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_INSTALL_PREFIX="$PWD/portmidi_install"
-            cmake --build portmidi/build
-            cmake --build portmidi/build --target install
-
-            git clone --depth 1 https://github.com/PortAudio/portaudio.git
-            cmake -S portaudio -B portaudio/build -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_INSTALL_PREFIX="$PWD/portaudio_install"
-            cmake --build portaudio/build
-            cmake --build portaudio/build --target install
-
-            git clone --depth 1 https://github.com/libsndfile/libsamplerate
-            cmake -S libsamplerate -B libsamplerate/build -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_INSTALL_PREFIX="$PWD/samplerate_install"
-            cmake --build libsamplerate/build
-            cmake --build libsamplerate/build --target install
-
-            git clone --depth 1 https://github.com/radarsat1/liblo
-            cmake -S liblo/cmake -B liblo/build -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_INSTALL_PREFIX="$PWD/liblo_install"
-            cmake --build liblo/build
-            cmake --build liblo/build --target install
-
-            # Csound itself: static deps, arm64, Release, into csound_install
-            cmake -B build-installer -DCMAKE_BUILD_TYPE="Release" -DUSE_GETTEXT=0 \
-              -DCMAKE_PREFIX_PATH="$PWD/platform/osx/libsndfile_build/dependencies;$PWD/portmidi_install;$PWD/portaudio_install;$PWD/samplerate_install;$PWD/liblo_install" \
-              -DCMAKE_INSTALL_PREFIX="$PWD/csound_install" -DCS_FRAMEWORK_DEST="$PWD/csound_install" \
-              -DCS_OPCODE_DIR="/Applications/Csound/CsoundLib64.framework/Resources/Opcodes64/" \
-              -DCMAKE_OSX_ARCHITECTURES="arm64" -DUSE_MP3=1 -DCMAKE_VERBOSE_MAKEFILE=1 \
-              -DUSE_STATIC_DEPS=1 -DBUILD_SRC_CONV=0 -DBUILD_OSC_OPCODES=1 -DALIGN_MEMORY=1 \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-            cmake --build build-installer --config Release --parallel
-            cmake --build build-installer --target install
-
-            # relink for /Applications/Csound - MUST run before CsoundQt links,
-            # so the framework id recorded in CsoundQt is the shipped path
-            install_name_tool -id /Applications/Csound/CsoundLib64.framework/CsoundLib64 csound_install/CsoundLib64.framework/CsoundLib64
-            install_name_tool -delete_rpath "$PWD/csound_install" csound_install/CsoundLib64.framework/CsoundLib64
-            install_name_tool -change @rpath/CsoundLib64.framework/Versions/7.0/CsoundLib64 /Applications/Csound/CsoundLib64.framework/Versions/7.0/CsoundLib64 csound_install/bin/csound
-            install_name_tool -change @rpath/libportmidi.2.dylib @loader_path/../../../../libs/libportmidi.dylib csound_install/CsoundLib64.framework/Versions/7.0/Resources/Opcodes64/libpmidi.dylib
-            install_name_tool -add_rpath /Applications/Csound/CsoundLib64.framework/libs portmidi_install/lib/libportmidi.dylib
-            install_name_tool -change @rpath/libportaudio.2.dylib @loader_path/../../../../libs/libportaudio.dylib csound_install/CsoundLib64.framework/Versions/7.0/Resources/Opcodes64/librtpa.dylib
-            install_name_tool -add_rpath /Applications/Csound/CsoundLib64.framework/libs portaudio_install/lib/libportaudio.dylib
-            install_name_tool -change @rpath/liblo.7.dylib @loader_path/../../../../libs/liblo.dylib csound_install/CsoundLib64.framework/Versions/7.0/Resources/Opcodes64/libosc.dylib
-            install_name_tool -add_rpath /Applications/Csound/CsoundLib64.framework/libs liblo_install/lib/liblo.dylib
-          fi
-
-      - name: Cache Qt
-        id: cache-qt
-        uses: actions/cache@v4
-        with:
-          path: ~/Qt
-          key: qt-${{ runner.os }}-${{ env.QTVERSION }}
-
-      - name: macos build
-        run: |
-          set -o xtrace   # echo each command before it is executed
-
-          pip install aqtinstall
-          # Only install if needed, use the existence of qmake as sign that
-          # qt is in the cache
-          if [ ! -x "$HOME/Qt/$QTVERSION/macos/bin/qmake" ]; then
-            aqt install-qt mac desktop "$QTVERSION" --outputdir ~/Qt
-          fi
-          export PATH="$HOME/Qt/$QTVERSION/macos/bin:$PATH"
-          
-          # CsoundQt links the CsoundLib64.framework built in the previous
-          # step (csound_install); its Headers dir holds all public headers
-          # incl. generated ones (float-version.h, version.h).
-          CSOUND_FRAMEWORK_HEADERS="$PWD/csound/csound_install/CsoundLib64.framework/Headers"
-          CSOUND_LIBRARY_DIR="$PWD/csound/csound_install/CsoundLib64.framework/Versions/7.0"
-
-          ccache_args=(QMAKE_CC="$(command -v ccache) clang" QMAKE_CXX="$(command -v ccache) clang++")
-          qmake CONFIG+=rtmidi CONFIG+=release \
-            "CSOUND_INCLUDE_DIR=$CSOUND_FRAMEWORK_HEADERS" \
-            "CSOUND_INTERFACES_INCLUDE_DIR=$CSOUND_FRAMEWORK_HEADERS" \
-            "CSOUND_LIBRARY_DIR=$CSOUND_LIBRARY_DIR" \
-            "${ccache_args[@]}" qcs.pro
-
-          # half the cpus, at least 1
-          JOBS=$(sysctl -n hw.logicalcpu) 
-          make -j"$JOBS"
-
-          # -------------------------------------------------------------
-
-          # --- Bundle the offline Csound manual into the app bundle ------
-          # CsoundQt auto-detects it at Contents/Resources/Manual on macOS
-          # (see csoundqt.cpp). Same download as installers/Linux/build-appimage.sh.
-          MANUAL_DIR="manual/csound7-manual-offline"
-          if [ ! -d "$MANUAL_DIR" ]; then
-            mkdir -p manual
-            curl -L --fail --silent --show-error -o manual/csound7-manual-offline.zip \
-              https://github.com/csound/manual/releases/download/latest/csound7-manual-offline.zip
-            unzip -q manual/csound7-manual-offline.zip -d manual
-          fi
-          mkdir -p "bin/${{ env.APPNAME }}.app/Contents/Resources/Manual"
-          cp -a "$MANUAL_DIR/." "bin/${{ env.APPNAME }}.app/Contents/Resources/Manual/"
-          find bin -maxdepth 4 | sort
-          otool -L bin/${{ env.APPNAME }}.app/Contents/MacOS/${{ env.APPNAME }}
-          test -x bin/${{ env.APPNAME }}.app/Contents/MacOS/${{ env.APPNAME }} \
-            && echo "CsoundQt binary OK"
-
-      # qcs.pro only runs macdeployqt through an INSTALLS rule (make install),
-      # which the workflow never invokes - so do the deployment explicitly here.
-      # Without it the .app keeps absolute references to the aqt Qt install in
-      # $HOME/Qt and ships without any Qt frameworks (cannot be launched on
-      # machines that do not have that Qt installation).
-      #
-      # macdeployqt must run WITHOUT signing: its built-in signing is
-      # unreliable and the code it deploys must be signed by hand, inside-out,
-      # because arm64 refuses to load binaries with a missing/invalid
-      # signature. codesign --deep is deprecated by Apple, so sign leaf-by-leaf.
-      - name: Bundle Qt frameworks into app bundle
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/Qt/${{ env.QTVERSION }}/macos/bin:$PATH"
-          APP="bin/${{ env.APPNAME }}.app"
-          test -d "$APP"
-          macdeployqt "$APP" -qmldir="$PWD/src/QML"
-
-          # 1. sign every Mach-O leaf (dylibs, framework binaries, plugins,
-          #    QML module plugins) so nothing loads unsigned on arm64
-          while IFS= read -r -d '' f; do
-            case "$(file -b "$f")" in
-              *Mach-O*) codesign --force --sign - "$f" ;;
-            esac
-          done < <(find "$APP" -type f -print0)
-
-          # 2. seal the framework bundles over their (already signed) code
-          while IFS= read -r -d '' fw; do
-            codesign --force --sign - "$fw"
-          done < <(find "$APP/Contents/Frameworks" -maxdepth 1 -name '*.framework' -print0)
-
-          # 3. main executable, then the .app bundle itself
-          codesign --force --sign - "$APP/Contents/MacOS/${{ env.APPNAME }}"
-          codesign --force --sign - "$APP"
-
-      # ------------------------------------------------------------------
-      # Assemble the redistributable Csound installer (.pkg), arm64, from the
-      # already-built and already-relinked csound_install. Copy (not move) into
-      # PkgContents so csound_install stays intact for caching across runs.
-      # ------------------------------------------------------------------
-      - name: macos csound installer pkg (arm64)
-        run: |
-          set -euo pipefail
-          CSOUND_VERSION="${{ steps.csound-build.outputs.version }}"
-          cd csound
-
-          # point ctcsound.py at the fixed framework location
-          sed -i -e 's$ctypes.util.find_library("CsoundLib64")$"/Applications/Csound/Csound64.framework/CsoundLib64"$g' Python/ctcsound.py
-
-          mkdir -p csound_install/CsoundLib64.framework/Versions/7.0/Resources/Python
-          cp Python/ctcsound.py csound_install/CsoundLib64.framework/Versions/7.0/Resources/Python
-          mkdir -p csound_install/CsoundLib64.framework/libs
-          cp portmidi_install/lib/*.dylib csound_install/CsoundLib64.framework/libs
-          cp portaudio_install/lib/*.dylib csound_install/CsoundLib64.framework/libs
-          cp liblo_install/lib/*.dylib csound_install/CsoundLib64.framework/libs
-          mkdir -p csound_install/CsoundLib64.framework/Versions/7.0/Resources/cmake
-          cp csound_install/share/csound/CsoundConfig.cmake csound_install/CsoundLib64.framework/Versions/7.0/Resources/cmake/
-          cp csound_install/share/csound/CsoundConfigVersion.cmake csound_install/CsoundLib64.framework/Versions/7.0/Resources/cmake/
-          cp csound_install/share/csound/FindCsound.cmake csound_install/CsoundLib64.framework/Versions/7.0/Resources/cmake/
-
-          rm -rf csound_install/PkgContents
-          mkdir -p csound_install/PkgContents/Applications/Csound
-          cp -a csound_install/bin/csound csound_install/PkgContents/Applications/Csound/.
-          cp -a csound_install/CsoundLib64.framework csound_install/PkgContents/Applications/Csound/.
-
-          pkgbuild --identifier com.csound.csound7Environment.csoundLib64 \
-            --root csound_install/PkgContents "CsoundLib64-${CSOUND_VERSION}-beta-arm64.pkg"
-          ls -lh "CsoundLib64-${CSOUND_VERSION}-beta-arm64.pkg"
-
-          # keep the cache lean: drop the PkgContents copy again
-          rm -rf csound_install/PkgContents
-
-      - name: Smoke test macOS app bundle
-        env:
-          CSOUND_PKG: csound/CsoundLib64-${{ steps.csound-build.outputs.version }}-beta-arm64.pkg
-        run: |
-          set -euo pipefail
-          test -f "${CSOUND_PKG}"
-          bash installers/MacOS/test-app-bundle.sh "bin/${{ env.APPNAME }}.app"
-
-      - name: Package macOS DMG
-        run: |
-          set -euo pipefail
-          CSOUND_VERSION="${{ steps.csound-build.outputs.version }}"
-          PKG="csound/CsoundLib64-${CSOUND_VERSION}-beta-arm64.pkg"
-          test -f "$PKG"
-          echo "Bundling: bin/${{ env.APPNAME }}.app and $PKG"
-
-          STAGE="dmg-staging"
-          mkdir -p "$STAGE"
-          cp -a "bin/${{ env.APPNAME }}.app" "$STAGE/"
-          cp "$PKG" "$STAGE/"
-
-          hdiutil create -fs HFS+ -srcfolder "$STAGE" -volname CsoundQt CsoundQt.dmg
-
-          echo "Creating artifacts folder"
-          mkdir -p artifacts
-          echo "Copying .dmg to artifacts"
-          cp CsoundQt.dmg artifacts
-          ls -lh artifacts
-          echo "ready!"
-
-      - name: Upload macOS DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CsoundQt-macOS
-          path: artifacts/*
-          if-no-files-found: error
-
-  windows:
-    name: Build Windows installer
-    runs-on: windows-latest
-    timeout-minutes: 180
-    defaults:
-      run:
-        shell: bash
-    env:
-      QTVERSION: 6.8.3
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: update submodules
-        run: |
-          echo "Calling git submodule update"
-          git submodule update --init --recursive
-          git submodule status --recursive
-          echo "Finished submodules"
-
-      # ------------------------------------------------------------------
-      # Windows build. Instead of compiling Csound from source (there is no
-      # apt/brew on Windows), we consume the official Csound 7 development
-      # build produced by csound/csound's own GitHub Actions workflow. We then
-      # compile csoundqt against csound and bundle the whole thing into a
-      # csoundqt installer via Inno Setup.
-      # ------------------------------------------------------------------
-      - name: Set up MSVC command line environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Resolve latest Csound 7 Windows installer from csound develop Actions
-        id: csound-installer
-        run: |
-          set -euo pipefail
-          mkdir -p csound-dl
-          curl -fsSL "https://api.github.com/repos/csound/csound/actions/workflows/csound_builds.yml/runs?branch=develop&status=success&per_page=5" -o csound-dl/runs.json
-          RUN_IDS=$(python -c "import json,sys; d=json.load(open(sys.argv[1])); print(' '.join(str(r['id']) for r in d['workflow_runs']))" csound-dl/runs.json)
-          ART_NAME=""
-          RUN_ID=""
-          for rid in ${RUN_IDS}; do
-            curl -fsSL "https://api.github.com/repos/csound/csound/actions/runs/${rid}/artifacts?per_page=100" -o csound-dl/artifacts.json
-            ART_NAME=$(python -c "import json,sys; d=json.load(open(sys.argv[1])); print([a['name'] for a in d.get('artifacts', []) if a['name'].startswith('Csound_x64-') and a['name'].endswith('-windows-installer')][0])" csound-dl/artifacts.json || true)
-            if [ -n "${ART_NAME}" ]; then
-              RUN_ID=${rid}
-              break
-            fi
-          done
-          test -n "${ART_NAME}" || { echo "No Csound_x64 windows-installer artifact found in recent csound develop runs"; exit 1; }
-          echo "Found artifact: ${ART_NAME} on run ${RUN_ID}"
-          echo "run-id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-          echo "artifact=${ART_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Download and install latest Csound 7 development build
-        id: csound-install-win
-        run: |
-          set -euo pipefail
-          mkdir -p csound-dl
-          # csound artifacts are not downloadable cross-repo with a plain token;
-          # nightly.link mirrors them anonymously.
-          curl -fsSL "https://nightly.link/csound/csound/actions/runs/${{ steps.csound-installer.outputs.run-id }}/${{ steps.csound-installer.outputs.artifact }}.zip" \
-            -o csound-dl/csound-installer.zip
-          powershell -Command "Expand-Archive -Path 'csound-dl/csound-installer.zip' -DestinationPath 'csound-dl' -Force"
-          INSTALLER=$(find csound-dl -maxdepth 2 -iname 'Csound7-windows_x86_64-*.exe' | head -1)
-          test -n "${INSTALLER}" || { echo "Csound installer exe not found in artifact"; exit 1; }
-          echo "Csound installer: ${INSTALLER}"
-          cp "${INSTALLER}" csound-dl/Csound7-windows-x86_64.exe
-          # Silent install into a local folder (same layout as "Program Files\Csound7"):
-          #   bin\csound64.dll, lib\csound64.lib, include\csound, plugins64
-          CSOUND_DIR=$(cygpath -w "$GITHUB_WORKSPACE/csound7")
-          MSYS_NO_PATHCONV=1 "${INSTALLER}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=${CSOUND_DIR}"
-          ls "$GITHUB_WORKSPACE/csound7"
-          "$GITHUB_WORKSPACE/csound7/bin/csound.exe" --version
-          echo "csound7-dir=$GITHUB_WORKSPACE/csound7" >> "$GITHUB_OUTPUT"
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '${{ env.QTVERSION }}'
-          host: windows
-          target: desktop
-          arch: win64_msvc2022_64
-          cache: true
-
-      - name: Install Inno Setup
-        run: |
-          choco install -y innosetup --no-progress
-
-      - name: windows csoundqt7 build
-        run: |
-          qmake --version
-          git submodule update --init --recursive
-          # qcs.pro runs windeployqt6 at the end of the build; make that tool
-          # resolve to the real windeployqt shipped with this Qt install.
-          QT_BIN=$(dirname "$(command -v windeployqt)")
-          if [ ! -f "${QT_BIN}/windeployqt6.exe" ]; then
-            cp "${QT_BIN}/windeployqt.exe" "${QT_BIN}/windeployqt6.exe"
-          fi
-          CSOUND_DIR="$GITHUB_WORKSPACE/csound7"
-          CSINC=$(cygpath -m "${CSOUND_DIR}/include/csound")
-          CSLIB=$(cygpath -m "${CSOUND_DIR}/lib")
-          # Keep csound64.dll next to the exe so the linker/deployment tools
-          # never complain about a missing import.
-          mkdir -p bin
-          cp -f "${CSOUND_DIR}/bin/csound64.dll" bin/ 2>/dev/null || true
-          qmake CONFIG+=rtmidi CONFIG+=release qcs.pro \
-            "CSOUND_API_INCLUDE_DIR=${CSINC}" \
-            "CSOUND_INTERFACES_INCLUDE_DIR=${CSINC}" \
-            "CSOUND_LIBRARY_DIR=${CSLIB}"
-          # nmake may report failure only because of qmake's post-build
-          # deployment step; the real criterion is the produced executable.
-          set +e
-          # Git Bash puts GNU coreutils in PATH, where /usr/bin/link.exe
-          # shadows MSVC's link.exe. Run nmake with a PATH that excludes the
-          # MSYS/Git unix tool dirs so the MSVC toolchain is used exclusively.
-          NMAKE_PATH=""
-          while IFS= read -r p; do
-            case "${p}" in
-              */usr/bin|/usr/bin|*/bin|/bin|*/mingw*/bin) ;;
-              *) NMAKE_PATH="${NMAKE_PATH}:${p}" ;;
-            esac
-          done < <(printf '%s' "${PATH}" | tr ':' '\n')
-          NMAKE_PATH="${NMAKE_PATH#:}"
-          env PATH="${NMAKE_PATH}" nmake
-          rc=$?
-          set -e
-          if [ "${rc}" -ne 0 ]; then
-            echo "nmake exited with ${rc}; checking whether the build output was produced"
-          fi
-          ls -la bin
-          test -f "bin/${{ env.APPNAME }}.exe"
-
-      - name: windows build CsoundQt installer (bundles Qt and Csound)
-        run: |
-          set -euo pipefail
-          APP_EXE="bin/${{ env.APPNAME }}.exe"
-          test -f "${APP_EXE}"
-          # Make sure the Qt runtime is fully deployed next to the exe.
-          if [ ! -f "bin/Qt6Core.dll" ]; then
-            windeployqt --qmldir "$PWD/src/QML" "${APP_EXE}"
-          fi
-          CSOUND_DIR="$GITHUB_WORKSPACE/csound7"
-          STAGE="$GITHUB_WORKSPACE/csoundqt-stage"
-          rm -rf "${STAGE}"
-          mkdir -p "${STAGE}/plugins64"
-          cp -r bin/. "${STAGE}/"
-          # Bundle the Csound runtime CsoundQt was built against, so the
-          # resulting installation is self-contained and distributable.
-          cp -f "${CSOUND_DIR}/bin/csound64.dll" "${STAGE}/"
-          if [ -d "${CSOUND_DIR}/plugins64" ]; then
-            cp -rf "${CSOUND_DIR}/plugins64/." "${STAGE}/plugins64/"
-          fi
-          cp -f images/csoundqt.ico "${STAGE}/"
-          mkdir -p artifacts
-          export CSOUNDQT_VERSION="$(tr -d '\r\n ' < VERSION.txt)"
-          export CSOUNDQT_APPNAME="${{ env.APPNAME }}.exe"
-          export CSOUNDQT_STAGING_DIR="$(cygpath -w "${STAGE}")"
-          # iscc only ships on the machine via choco; /o. puts the installer in cwd
-          MSYS_NO_PATHCONV=1 iscc /o. installers/Windows/csoundqt7-x64.iss
-          cp CsoundQt-windows-x86_64.exe artifacts/
-          # pass the Csound installer (official development build) along too
-          cp csound-dl/Csound7-windows-x86_64.exe artifacts/
-          ls -la artifacts
-
-      - name: Upload Windows installer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CsoundQt-Windows
-          path: artifacts/*
-          if-no-files-found: error
+    - name: Upload AppImage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: CsoundQt-Linux
+        path: build-appimage/*.AppImage
+        if-no-files-found: error
 
   publish:
     name: Publish Development Build pre-release
-    needs: [appimage, macos, windows]
+    needs:
+    - appimage
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download Linux AppImage
-        uses: actions/download-artifact@v4
-        with:
-          name: CsoundQt-Linux
-          path: artifacts
+    - name: Download Linux AppImage
+      uses: actions/download-artifact@v4
+      with:
+        name: CsoundQt-Linux
+        path: artifacts
 
-      - name: Download macOS DMG
-        uses: actions/download-artifact@v4
-        with:
-          name: CsoundQt-macOS
-          path: artifacts
+    - name: Download macOS DMG
+      uses: actions/download-artifact@v4
+      with:
+        name: CsoundQt-macOS
+        path: artifacts
 
-      - name: Download Windows installer
-        uses: actions/download-artifact@v4
-        with:
-          name: CsoundQt-Windows
-          path: artifacts
+    - name: Download Windows installer
+      uses: actions/download-artifact@v4
+      with:
+        name: CsoundQt-Windows
+        path: artifacts
 
-      - name: List artifacts
-        run: |
-          ls -lR artifacts
+    - name: List artifacts
+      run: |
+        ls -lR artifacts
 
       # Replace any existing development prerelease (title starting with
       # "Development") with this build, reusing the "latest" tag, and upload
       # all installers (AppImage, DMG, Windows installers) as release assets.
-      - name: Publish Development Build pre-release
-        if: github.ref_name == 'csoundqt7' || github.ref_name == 'develop'
-        env:
-          GH_TOKEN: ${{ github.token }}
+    - name: Publish Development Build pre-release
+      if: github.ref_name == 'csoundqt7' || github.ref_name == 'develop'
+      env:
+        GH_TOKEN: ${{ github.token }}
           # this job does not checkout the repository, so gh cannot discover
           # the repo from git; point it there explicitly (gh release create
           # and --generate-notes would otherwise fail with "not a git repository")
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          REPO="${{ github.repository }}"
-          SHA="${{ github.sha }}"
-          TAG="latest"
-          
-          # remove every previous prerelease whose title starts with "Development"
-          gh api --paginate "repos/${REPO}/releases?per_page=100" \
-            --jq '.[] | select(.prerelease == true and (.name | startswith("Development"))) | .id' \
-            | while read -r id; do
-                echo "Deleting previous development prerelease (release id ${id})"
-                gh api -X DELETE "repos/${REPO}/releases/${id}"
-              done
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        REPO="${{ github.repository }}"
+        SHA="${{ github.sha }}"
+        TAG="latest"
 
-          # point the tag at this commit (create it if it does not exist yet)
-          if gh api --method GET "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
-            gh api --method PATCH "repos/${REPO}/git/refs/tags/${TAG}" \
-              -f sha="${SHA}" \
-              -F force=true
-          else
-            gh api --method POST "repos/${REPO}/git/refs" \
-              -f ref="refs/tags/${TAG}" \
-              -f sha="${SHA}"
-          fi
+        # remove every previous prerelease whose title starts with "Development"
+        gh api --paginate "repos/${REPO}/releases?per_page=100" \
+          --jq '.[] | select(.prerelease == true and (.name | startswith("Development"))) | .id' \
+          | while read -r id; do
+              echo "Deleting previous development prerelease (release id ${id})"
+              gh api -X DELETE "repos/${REPO}/releases/${id}"
+            done
 
-          # (re)create the prerelease on that tag and attach all installers
-          gh release create "${TAG}" artifacts/* \
-            --prerelease \
-            --title "Development Build" \
-            --generate-notes \
-            --target "${SHA}"
-          echo "Prerelease '${TAG}' published"
+        # point the tag at this commit (create it if it does not exist yet)
+        if gh api --method GET "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+          gh api --method PATCH "repos/${REPO}/git/refs/tags/${TAG}" \
+            -f sha="${SHA}" \
+            -F force=true
+        else
+          gh api --method POST "repos/${REPO}/git/refs" \
+            -f ref="refs/tags/${TAG}" \
+            -f sha="${SHA}"
+        fi
+
+        # (re)create the prerelease on that tag and attach all installers
+        gh release create "${TAG}" artifacts/* \
+          --prerelease \
+          --title "Development Build" \
+          --generate-notes \
+          --target "${SHA}"
+        echo "Prerelease '${TAG}' published"
